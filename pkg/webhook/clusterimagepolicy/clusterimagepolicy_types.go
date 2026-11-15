@@ -25,6 +25,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
+	"github.com/sigstore/policy-controller/pkg/apis/policy/common"
 	"github.com/sigstore/policy-controller/pkg/apis/policy/v1alpha1"
 	signaturealgo "github.com/sigstore/policy-controller/pkg/apis/signaturealgo"
 	"github.com/sigstore/policy-controller/pkg/webhook/registryauth"
@@ -219,6 +220,15 @@ func (a *Authority) UnmarshalJSON(data []byte) error {
 	if len(rawAuthority.Sources) > 0 {
 		for _, source := range rawAuthority.Sources {
 			if source.OCI != "" {
+				// A registry-only source reuses the image's repository path.
+				// The target repository can only be derived once the image
+				// reference is known, so defer that option until validation.
+				if common.IsRegistryOnlyOCI(source.OCI) {
+					if _, err := name.NewRegistry(source.OCI); err != nil {
+						return fmt.Errorf("failed to determine source: %w", err)
+					}
+					continue
+				}
 				if targetRepoOverride, err := name.NewRepository(source.OCI); err != nil {
 					return fmt.Errorf("failed to determine source: %w", err)
 				} else if (targetRepoOverride != name.Repository{}) {

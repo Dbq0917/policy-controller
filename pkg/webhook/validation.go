@@ -100,10 +100,15 @@ func discoverAttestationsOCI11(ctx context.Context, ref name.Reference, checkOpt
 		return nil, err
 	}
 
+	repository := digest.Repository
+	if targetRepo := ociremote.TargetRepositoryFromOptions(checkOpts.RegistryClientOpts...); targetRepo != (name.Repository{}) {
+		repository = targetRepo
+	}
+
 	var allSigs []oci.Signature
 	for _, manifest := range indexManifest.Manifests {
 		if strings.Contains(manifest.ArtifactType, "in-toto") {
-			sigs, err := testProcessAttestationArtifact(manifest, digest.Repository, checkOpts.RegistryClientOpts)
+			sigs, err := testProcessAttestationArtifact(manifest, repository, checkOpts.RegistryClientOpts)
 			if err != nil {
 				logging.FromContext(ctx).Debugf("Failed to process attestation artifact: %v", err)
 				continue

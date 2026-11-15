@@ -39,6 +39,7 @@ import (
 	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
 	"github.com/sigstore/policy-controller/pkg/apis/config"
 	policyduckv1beta1 "github.com/sigstore/policy-controller/pkg/apis/duck/v1beta1"
+	"github.com/sigstore/policy-controller/pkg/apis/policy/common"
 	policycontrollerconfig "github.com/sigstore/policy-controller/pkg/config"
 	pctuf "github.com/sigstore/policy-controller/pkg/tuf"
 	webhookcip "github.com/sigstore/policy-controller/pkg/webhook/clusterimagepolicy"
@@ -553,7 +554,7 @@ func ValidatePolicy(ctx context.Context, namespace string, ref name.Reference, c
 			// Assignment for appendAssign lint error
 			authorityRemoteOpts := remoteOpts
 			authorityRemoteOpts = append(authorityRemoteOpts, authority.RemoteOpts...)
-			authorityRemoteOpts = append(authorityRemoteOpts, sourceRemoteOpts(ctx, authority)...)
+			authorityRemoteOpts = append(authorityRemoteOpts, sourceRemoteOpts(ctx, ref, authority)...)
 
 			signaturePullSecretsOpts, err := authority.SourceSignaturePullSecretsOpts(ctx, namespace)
 			if err != nil {
@@ -1135,20 +1136,35 @@ func parseRepository(ctx context.Context, repo string) (name.Repository, error) 
 // authority's OCI sources. Authority.UnmarshalJSON builds these without
 // access to the config, so it cannot honor insecure-registries; the
 // options appended here take precedence over the ones it built.
-func sourceRemoteOpts(ctx context.Context, authority webhookcip.Authority) []ociremote.Option {
+func sourceRemoteOpts(ctx context.Context, ref name.Reference, authority webhookcip.Authority) []ociremote.Option {
 	var opts []ociremote.Option
 	for _, source := range authority.Sources {
 		if source.OCI == "" {
 			continue
 		}
-		repo, err := parseRepository(ctx, source.OCI)
+		repo, err := sourceRepository(ctx, ref, source.OCI)
 		if err != nil {
-			// Invalid sources were already rejected by UnmarshalJSON.
+			logging.FromContext(ctx).Warnf("Unable to determine signature source repository %q for image %q: %v", source.OCI, ref.Name(), err)
 			continue
 		}
 		opts = append(opts, ociremote.WithTargetRepository(repo))
 	}
 	return opts
+}
+
+// sourceRepository returns the repository that holds signatures and
+// attestations for ref. A source may be either a full repository or just a
+// registry; for a registry-only source the image's repository path is kept.
+func sourceRepository(ctx context.Context, ref name.Reference, source string) (name.Repository, error) {
+	if !common.IsRegistryOnlyOCI(source) {
+		return parseRepository(ctx, source)
+	}
+
+	registry, err := name.NewRegistry(source)
+	if err != nil {
+		return name.Repository{}, err
+	}
+	return parseRepository(ctx, fmt.Sprintf("%s/%s", registry.RegistryStr(), ref.Context().RepositoryStr()))
 }
 
 func (v *Validator) resolvePodSpec(ctx context.Context, ps *corev1.PodSpec, opt k8schain.Options) {

@@ -72,3 +72,25 @@ func TestValidateOCI(t *testing.T) {
 		})
 	}
 }
+
+func TestIsRegistryOnlyOCI(t *testing.T) {
+	tests := []struct {
+		oci  string
+		want bool
+	}{
+		{oci: "gcr.io", want: true},
+		{oci: "localhost", want: true},
+		{oci: "localhost:5000", want: true},
+		{oci: "registry.example.com", want: true},
+		{oci: "gcr.io/sigstore/test", want: false},
+		{oci: "localhost:5000/repo/image", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.oci, func(t *testing.T) {
+			if got := IsRegistryOnlyOCI(test.oci); got != test.want {
+				t.Errorf("IsRegistryOnlyOCI(%q) = %v, want %v", test.oci, got, test.want)
+			}
+		})
+	}
+}

@@ -4685,3 +4685,114 @@ func TestParseReferenceInsecureRegistries(t *testing.T) {
 		})
 	}
 }
+
+func TestSourceRemoteOptsUsesImageRepositoryPath(t *testing.T) {
+	const image = "registry.example.com/team/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	tests := []struct {
+		name               string
+		image              string
+		source             string
+		insecureRegistries []string
+		wantRepository     string
+		wantScheme         string
+	}{{
+		name:           "full source repository",
+		image:          image,
+		source:         "build.example.com/team/app",
+		wantRepository: "build.example.com/team/app",
+		wantScheme:     "https",
+	}, {
+		name:           "source registry reuses image repository path",
+		image:          image,
+		source:         "build.example.com",
+		wantRepository: "build.example.com/team/app",
+		wantScheme:     "https",
+	}, {
+		name:           "source registry with port reuses image repository path",
+		image:          image,
+		source:         "build.example.com:5000",
+		wantRepository: "build.example.com:5000/team/app",
+		wantScheme:     "https",
+	}, {
+		name:               "insecure source registry",
+		image:              image,
+		source:             "build.example.com:5000",
+		insecureRegistries: []string{"build.example.com:5000"},
+		wantRepository:     "build.example.com:5000/team/app",
+		wantScheme:         "http",
+	}, {
+		name:           "full source repository with different path",
+		image:          image,
+		source:         "build.example.com/mirror/team/app",
+		wantRepository: "build.example.com/mirror/team/app",
+		wantScheme:     "https",
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := policycontrollerconfig.ToContext(context.Background(),
+				&policycontrollerconfig.PolicyControllerConfig{InsecureRegistries: tc.insecureRegistries})
+			ref, err := name.ParseReference(tc.image)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := sourceRemoteOpts(ctx, ref, webhookcip.Authority{
+				Sources: []v1alpha1.Source{{OCI: tc.source}},
+			})
+
+			repository := remote.TargetRepositoryFromOptions(opts...)
+			if got, want := repository.Name(), tc.wantRepository; got != want {
+				t.Errorf("target repository = %q, want %q", got, want)
+			}
+			if got, want := repository.Scheme(), tc.wantScheme; got != want {
+				t.Errorf("target repository scheme = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestDiscoverAttestationsOCI11UsesTargetRepository(t *testing.T) {
+	ctx := context.Background()
+	ref := name.MustParseReference("registry.example.com/team/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	targetRepository, err := name.NewRepository("build.example.com/team/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkOpts := &cosign.CheckOpts{
+		RegistryClientOpts: []remote.Option{remote.WithTargetRepository(targetRepository)},
+	}
+
+	originalResolve := ociremoteResolveDigest
+	originalReferrers := ociremoteReferrers
+	originalProcess := testProcessAttestationArtifact
+	defer func() {
+		ociremoteResolveDigest = originalResolve
+		ociremoteReferrers = originalReferrers
+		testProcessAttestationArtifact = originalProcess
+	}()
+
+	ociremoteResolveDigest = func(ref name.Reference, _ ...remote.Option) (name.Digest, error) {
+		return ref.Context().Digest(ref.Identifier()), nil
+	}
+	ociremoteReferrers = func(name.Digest, string, ...remote.Option) (*v1.IndexManifest, error) {
+		return &v1.IndexManifest{Manifests: []v1.Descriptor{{
+			ArtifactType: "application/vnd.in-toto+json",
+			Digest:       v1.Hash{Algorithm: "sha256", Hex: strings.Repeat("b", 64)},
+		}}}, nil
+	}
+
+	var gotRepository name.Repository
+	testProcessAttestationArtifact = func(_ v1.Descriptor, repository name.Repository, _ []remote.Option) ([]oci.Signature, error) {
+		gotRepository = repository
+		sig, err := static.NewSignature(nil, "")
+		return []oci.Signature{sig}, err
+	}
+
+	if _, err := discoverAttestationsOCI11(ctx, ref, checkOpts); err != nil {
+		t.Fatalf("discoverAttestationsOCI11() error = %v", err)
+	}
+	if got, want := gotRepository.Name(), targetRepository.Name(); got != want {
+		t.Errorf("artifact repository = %q, want %q", got, want)
+	}
+}

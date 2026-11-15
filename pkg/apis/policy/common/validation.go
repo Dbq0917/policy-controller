@@ -72,6 +72,15 @@ func ValidateOCI(oci string) error {
 	return nil
 }
 
+// IsRegistryOnlyOCI reports whether oci identifies a registry without a
+// repository path. ValidateOCI accepts both registry-only values and
+// registry/repository values, so callers that need to construct a signature
+// repository must distinguish between the two.
+func IsRegistryOnlyOCI(oci string) bool {
+	parts := strings.SplitN(oci, ociRepoDelimiter, 2)
+	return !(len(parts) == 2 && (strings.ContainsRune(parts[0], '.') || strings.ContainsRune(parts[0], ':')))
+}
+
 var (
 	errKMSReference = errors.New("kms key should be in the format awskms://[ENDPOINT]/[ID/ALIAS/ARN] (endpoint optional)")
 
